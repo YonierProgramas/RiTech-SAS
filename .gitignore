@@ -1,0 +1,32 @@
+target/
+.idea/
+.vscode/
+*.iml
+.env
+.env.local
+.DS_Store
+.mvn/apache-maven-*/
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+
+# Local/runtime files
+.env.local
+.postman/
+uploads/
+error*.txt
+playwright-report/
+test-results/
+node_modules/
+target/
+
+postman/reports/
+
+postman/collections/
+postman/environments/
+postman/globals/

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RiTech SAS | Iniciar sesión</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <section class="login-copy">
+      <div class="brand">RiTech <span>SAS</span></div>
+      <p class="eyebrow">Sistema de Gestión de Exportaciones</p>
+      <h1>Control, calidad y trazabilidad en un solo lugar.</h1>
+      <p class="muted">Prototipo académico para la gestión de exportaciones de café y cacao.</p>
+    </section>
+    <section class="login-form-wrap">
+      <h2>Iniciar sesión</h2>
+      <p id="login-message" class="message"></p>
+      <form method="post" action="/login" class="form-stack">
+        <label>Correo
+          <input name="email" type="email" required placeholder="comercial@ritech.example">
+        </label>
+        <label>Contraseña
+          <input name="password" type="password" required placeholder="••••••••••">
+        </label>
+        <button class="btn primary" type="submit">Ingresar</button>
+      </form>
+      <div class="demo-box">
+        <strong>Acceso DEMO</strong>
+        <span>Contraseña para las 6 cuentas: <code>Ritech2026*</code></span>
+        <small>Ejemplos: comercial@ritech.example · ventas@ritech.example · auditoria@ritech.example</small>
+      </div>
+    </section>
+  </main>
+<script>
+const p=new URLSearchParams(location.search);const m=document.getElementById('login-message');
+if(p.has('error')){m.textContent='Credenciales incorrectas o usuario inactivo.';m.className='message error'}
+if(p.has('logout')){m.textContent='Sesión cerrada correctamente.';m.className='message ok'}
+</script>
+</body>
+</html>

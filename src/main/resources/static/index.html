@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RiTech SAS | Operación</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">RiTech <span>SAS</span></div>
+    <div class="sidebar-sub">Exportaciones</div>
+    <nav id="nav"></nav>
+    <form action="/logout" method="post" id="logout-form"><button class="nav-link logout" type="submit">Cerrar sesión</button></form>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <div><strong id="page-title">Dashboard operativo</strong><div id="role-label" class="muted small"></div></div>
+      <div class="user-chip"><span id="user-name">Cargando…</span></div>
+    </header>
+    <section id="content" class="content"></section>
+  </main>
+</div>
+<div id="toast" class="toast"></div>
+<script src="/js/app.js"></script>
+</body>
+</html>

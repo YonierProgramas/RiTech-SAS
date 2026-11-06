@@ -1,0 +1,159 @@
+name: RiTech SAS - Sprint 3
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sprint3-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          # Public, disposable CI credential. Never a local MySQL password.
+          MYSQL_ROOT_PASSWORD: ritech-ci-mysql-ephemeral-2026
+          MYSQL_ROOT_HOST: '%'
+          TZ: UTC
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=24
+          --health-start-period=10s
+    env:
+      CI: 'true'
+      RITECH_DB_URL: 'jdbc:mysql://127.0.0.1:3306/ritech_sprint2?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC'
+      RITECH_DB_USER: root
+      RITECH_DB_PASSWORD: ritech-ci-mysql-ephemeral-2026
+      RITECH_RUN_MYSQL_INTEGRATION: 'true'
+      RITECH_TEST_DB_URL: 'jdbc:mysql://127.0.0.1:3306/ritech_sprint2?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC'
+      RITECH_TEST_DB_USER: root
+      RITECH_TEST_DB_PASSWORD: ritech-ci-mysql-ephemeral-2026
+      RITECH_E2E_COMERCIAL_USERNAME: comercial@ritech.example
+      RITECH_E2E_VENTAS_USERNAME: ventas@ritech.example
+      RITECH_E2E_EXPORTACIONES_USERNAME: exportaciones@ritech.example
+      RITECH_E2E_LOGISTICA_USERNAME: logistica@ritech.example
+      RITECH_E2E_CALIDAD_USERNAME: calidad@ritech.example
+      RITECH_E2E_AUDITORIA_USERNAME: auditoria@ritech.example
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Java 21 (Temurin)
+        uses: actions/setup-java@v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Node.js 24
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Configure the disposable DEMO accounts
+        env:
+          RITECH_E2E_PASSWORD: ${{ secrets.RITECH_E2E_PASSWORD }}
+        run: node scripts/ci/demo-env.cjs
+
+      - name: Authenticate MySQL, initialize and verify the fresh schema
+        run: bash scripts/ci/mysql-init.sh '${{ job.services.mysql.id }}'
+
+      - name: Maven - JUnit and MySQL integration
+        id: junit
+        run: |
+          mvn --batch-mode --no-transfer-progress clean verify
+          node scripts/ci/check-junit.cjs
+
+      - name: JaCoCo report, including a failed test run
+        if: ${{ always() && hashFiles('target/jacoco.exec') != '' }}
+        run: mvn --batch-mode --no-transfer-progress jacoco:report
+
+      - name: Publish JaCoCo
+        if: ${{ always() && hashFiles('target/site/jacoco/index.html') != '' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          retention-days: 14
+
+      - name: Install Node dependencies
+        id: node-deps
+        # Also needed to sanitize diagnostics after a preceding failure.
+        if: ${{ always() && !cancelled() }}
+        run: npm ci
+
+      - name: Verify the CI helpers
+        if: ${{ !cancelled() && steps.node-deps.outcome == 'success' }}
+        run: npm run test:ci:helpers
+
+      - name: Install Chromium and its system dependencies
+        if: ${{ !cancelled() && steps.junit.outcome == 'success' && steps.node-deps.outcome == 'success' }}
+        run: npx playwright install --with-deps chromium
+
+      - name: Start RiTech and wait for its public login page
+        id: spring
+        env:
+          RITECH_DEMO_RESET_PASSWORDS: 'true'
+          RITECH_DOCUMENTOS_DIR: ${{ runner.temp }}/ritech-uploads
+        run: bash scripts/ci/start-app.sh
+
+      - name: Playwright - Chromium, isolated sessions, one worker
+        id: playwright
+        run: npx playwright test
+
+      - name: Newman - session, CSRF and API assertions
+        # API evidence is still useful when a browser scenario failed.
+        if: ${{ !cancelled() && steps.spring.outcome == 'success' && steps.node-deps.outcome == 'success' }}
+        run: npm run test:api
+
+      - name: Sanitize and inspect artifacts before publishing
+        id: artifacts
+        if: ${{ always() && steps.node-deps.outcome == 'success' }}
+        run: node scripts/ci/sanitize-artifacts.cjs
+
+      - name: Publish Playwright HTML
+        if: ${{ always() && steps.artifacts.outputs.playwright_report == 'true' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: playwright-report
+          path: target/ci-artifacts/playwright-report/
+          retention-days: 14
+
+      - name: Publish sanitized traces, screenshots and videos
+        if: ${{ always() && steps.artifacts.outputs.playwright_test_results == 'true' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: playwright-test-results
+          path: target/ci-artifacts/test-results/
+          retention-days: 14
+
+      - name: Publish the inspected Newman HTML
+        if: ${{ always() && steps.artifacts.outputs.newman_report == 'true' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: newman-report
+          path: target/ci-artifacts/newman-report/
+          retention-days: 14
+
+      - name: Stop the background application
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [[ -f target/ci/spring-boot.pid ]]; then
+            read -r app_pid < target/ci/spring-boot.pid
+            if [[ "$app_pid" =~ ^[0-9]+$ ]]; then kill "$app_pid" 2>/dev/null || true; fi
+          fi

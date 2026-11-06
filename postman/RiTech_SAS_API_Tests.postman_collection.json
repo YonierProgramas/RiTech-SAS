@@ -1,0 +1,1618 @@
+{
+  "info": {
+    "_postman_id": "b0a4f03e-effc-40f3-b874-d273ae211c30",
+    "name": "RiTech SAS - API Tests",
+    "description": "RiTech SAS API real. Sesión Spring Security, no JWT. Plantillas de escritura no destructivas.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if(!pm.environment.get('runId'))pm.environment.set('runId',String(Date.now()));",
+          "const method=pm.request.method.toUpperCase();",
+          "const requestUrl=pm.request.url.toString();",
+          "const isLogin=requestUrl.endsWith('/login');",
+          "const isWrite=!['GET','HEAD','OPTIONS'].includes(method);",
+          "pm.environment.set('csrfSentForRequest','false');",
+          "if(isLogin){",
+          "  pm.environment.set('sessionAuthenticated','false');",
+          "  pm.environment.unset('csrfToken');pm.environment.unset('csrfHeaderName');pm.environment.unset('csrfParameterName');",
+          "}else if(isWrite){",
+          "  const token=pm.environment.get('csrfToken');",
+          "  const headerName=pm.environment.get('csrfHeaderName');",
+          "  if(pm.environment.get('sessionAuthenticated')==='true'&&token&&headerName){",
+          "    pm.request.headers.upsert({key:headerName,value:token});",
+          "    pm.environment.set('csrfSentForRequest','true');",
+          "  }",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Respuesta < 5 s',function(){pm.expect(pm.response.responseTime).to.be.below(5000)});",
+          "const isPostLogoutVerification=pm.info.requestName===\"Verificar sesión cerrada\";",
+          "const url=pm.request.url.toString();const isApi=url.includes('/api/')&&!isPostLogoutVerification;const status=pm.response.code;",
+          "const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();const isJson=ct.includes('application/json')||ct.includes('+json');",
+          "const redirect=[301,302,303,307,308].includes(status);let apiError='';let parseError='';let parsedJson=false;",
+          "if(isJson){try{pm.response.json();parsedJson=true}catch(e){parseError=String(e)}}",
+          "if(isApi&&redirect)apiError='API respondió '+status+' con redirect a '+(pm.response.headers.get('Location')||'(sin Location)')+'. Sesión no autenticada o expirada.';",
+          "else if(isApi&&status===401)apiError='API respondió 401: la sesión no está autenticada o expiró.';",
+          "else if(isApi&&status===200&&!isJson)apiError='API respondió 200 con '+(ct||'Content-Type ausente')+' en lugar de JSON; posible HTML de login.';",
+          "else if(isApi&&status===403&&!isJson)apiError='API respondió 403 sin JSON; revisa sesión y CSRF.';",
+          "else if(isApi&&isJson&&!parsedJson)apiError='API declaró JSON pero el cuerpo no se puede parsear: '+parseError;",
+          "if(apiError){pm.environment.set('runnerSessionLost','true');pm.environment.set('sessionAuthenticated','false');pm.test('Respuesta API no es login/redirect/JSON inválido',function(){throw new Error(apiError)});pm.execution.setNextRequest(null)}",
+          "else{pm.environment.set('runnerSessionLost','false');if(isJson)pm.test('Cuerpo JSON parseable según Content-Type',function(){pm.expect(parsedJson).to.eql(true)})}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication / Session",
+      "item": [
+        {
+          "name": "Iniciar sesión",
+          "description": "Spring Security form login: email/password urlencoded.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let loc='';",
+                  "try{loc=pm.response.headers.get('Location')||pm.response.headers.get('location')||'';if(!loc&&typeof pm.response.headers.all==='function'){const hs=pm.response.headers.all();const h=hs.find(x=>String(x.key||x.name||'').toLowerCase()==='location');if(h)loc=h.value||''}}catch(e){}",
+                  "loc=String(loc||'').trim();",
+                  "const base=String(pm.environment.get('baseUrl')||'').trim();",
+                  "function parseAuthorityOrigin(scheme,authority){scheme=String(scheme||'').toLowerCase();authority=String(authority||'').trim().toLowerCase();if(!/^[a-z][a-z0-9+.-]*$/.test(scheme)||!authority||authority.includes('@'))return null;const m=authority.match(/^(\\[[0-9a-f:.]+\\]|[^:]+)(?::([0-9]+))?$/i);if(!m)return null;const host=m[1].toLowerCase();let port=m[2]?String(Number(m[2])):'';if((scheme==='http'&&port==='80')||(scheme==='https'&&port==='443'))port='';return scheme+'://'+host+(port?':'+port:'')}",
+                  "function normalizePath(path){path=String(path||'/');if(!path.startsWith('/'))return null;const parts=path.slice(1).split('/');const out=[];for(const raw of parts){const part=raw.toLowerCase().replace(/%2e/g,'.');if(part==='.')continue;if(part==='..'){if(out.length)out.pop();continue}out.push(raw)}let result='/'+out.join('/');if(path.endsWith('/')&&result!=='/'&&!result.endsWith('/'))result+='/';return result||'/'}",
+                  "function splitUrl(raw,baseUrl){raw=String(raw||'').trim();const bm=String(baseUrl||'').match(/^([a-z][a-z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/i);if(!bm)return null;const baseScheme=bm[1].toLowerCase(),baseOrigin=parseAuthorityOrigin(baseScheme,bm[2]);if(!baseOrigin)return null;let scheme=baseScheme,authority=bm[2],tail='';if(/^[a-z][a-z0-9+.-]*:\\/\\//i.test(raw)){const m=raw.match(/^([a-z][a-z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/i);if(!m)return null;scheme=m[1];authority=m[2];tail=(m[3]||'/')+(m[4]!==undefined?'?'+m[4]:'')}else if(raw.startsWith('//')){const m=raw.match(/^\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/);if(!m)return null;authority=m[1];tail=(m[2]||'/')+(m[3]!==undefined?'?'+m[3]:'')}else{tail=raw.split('#')[0];if(!tail)tail='/';if(!tail.startsWith('/')&&!tail.startsWith('?')){const basePath=bm[3]||'/';tail=basePath.slice(0,basePath.lastIndexOf('/')+1)+tail}}const hashAt=tail.indexOf('#');if(hashAt>=0)tail=tail.slice(0,hashAt);const queryAt=tail.indexOf('?');const path=queryAt>=0?tail.slice(0,queryAt):tail;const query=queryAt>=0?tail.slice(queryAt+1):'';return{origin:parseAuthorityOrigin(scheme,authority),baseOrigin,path:normalizePath(path||'/'),query}}",
+                  "function hasAuthError(query){return String(query||'').split('&').some(pair=>{let key=pair.split('=')[0].replace(/\\+/g,' ');try{key=decodeURIComponent(key)}catch(e){}return /(error|fail|exception)/i.test(key)})}",
+                  "const target=loc?splitUrl(loc,base):null;",
+                  "const locationError=!!target&&hasAuthError(target.query);",
+                  "const loginError=!!target&&target.path==='/login.html'&&locationError;",
+                  "const successfulRedirect=pm.response.code===302&&!!target&&!!target.origin&&target.origin===target.baseOrigin&&target.path==='/'&&!locationError;",
+                  "const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                  "const body=pm.response.text().toLowerCase();",
+                  "const followedSuccessfulRedirect=pm.response.code===200&&ct.includes('text/html')&&body.includes('class=\"app-shell\"')&&body.includes('id=\"logout-form\"')&&!body.includes('name=\"email\"')&&!body.includes('id=\"login-message\"');",
+                  "const loginOk=successfulRedirect||followedSuccessfulRedirect;",
+                  "pm.test('Login Spring Security acepta solo destino exitoso',function(){",
+                  " pm.expect([200,302],'status de login').to.include(pm.response.code);",
+                  " pm.expect(loginError,'redirect a /login.html?error').to.eql(false);",
+                  " pm.expect(locationError,'parametro de error de autenticacion en Location').to.eql(false);",
+                  " pm.expect(loginOk,'Location debe ser / del mismo origen o 200 del dashboard seguido').to.eql(true);",
+                  " if(successfulRedirect){pm.expect(loc,'Location ausente').to.not.equal('');pm.expect(target.path).to.eql('/');pm.expect(target.origin).to.eql(target.baseOrigin)}else{pm.expect(ct,'dashboard seguido debe ser HTML').to.include('text/html');pm.expect(body).to.include('id=\"logout-form\"');pm.expect(body).not.to.include('name=\"email\"')}",
+                  "});",
+                  "if(loginOk){pm.environment.set('sessionAuthenticated','true');pm.environment.set('runnerSessionLost','false');pm.environment.unset('csrfToken');pm.environment.unset('csrfHeaderName');pm.environment.unset('csrfParameterName')}",
+                  "else{pm.environment.set('sessionAuthenticated','false');pm.execution.setNextRequest(null)}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/login",
+            "description": "Spring Security form login: email/password urlencoded.",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "email",
+                  "value": "{{username}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{password}}",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Sesión actual",
+          "description": "Confirma identidad y rol.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                  " const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();let data=null;let valid=false;",
+                  " try{if(ct.includes('application/json')||ct.includes('+json')){data=pm.response.json();valid=pm.response.code===200&&data&&Number(data.id)>0&&data.email===pm.environment.get('username')&&data.rol===(pm.collectionVariables.get('expectedRole')||'ESPECIALISTA_EXPORTACION')}}catch(e){}",
+                  " pm.test('Sesión válida: HTTP 200 JSON, id, email y rol esperados',function(){pm.expect(pm.response.code).to.eql(200);pm.expect(ct,'respuesta HTML/login inesperada').to.satisfy(v=>v.includes('application/json')||v.includes('+json'));pm.expect(data,'JSON de sesión inválido').to.be.an('object');pm.expect(Number(data&&data.id)).to.be.above(0);pm.expect(data&&data.email).to.eql(pm.environment.get('username'));pm.expect(data&&data.rol).to.eql(pm.collectionVariables.get('expectedRole')||'ESPECIALISTA_EXPORTACION')});",
+                  " if(valid)pm.environment.set('sessionAuthenticated','true');else{pm.environment.set('sessionAuthenticated','false');pm.execution.setNextRequest(null)}",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/session",
+            "description": "Confirma identidad y rol."
+          }
+        },
+        {
+          "name": "Obtener CSRF",
+          "description": "Guarda token, header y parameter en environment.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                  " const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();let data=null;let valid=false;",
+                  " try{if(ct.includes('application/json')||ct.includes('+json')){data=pm.response.json();valid=pm.response.code===200&&!!(data&&data.token&&data.headerName&&data.parameterName)}}catch(e){}",
+                  " pm.test('CSRF obtenido desde sesión autenticada como JSON válido',function(){pm.expect(pm.response.code).to.eql(200);pm.expect(ct,'/api/csrf devolvió HTML/login o Content-Type no JSON').to.satisfy(v=>v.includes('application/json')||v.includes('+json'));pm.expect(data,'objeto CSRF inválido').to.be.an('object');pm.expect(data&&data.token).to.be.a('string').and.not.empty;pm.expect(data&&data.headerName).to.be.a('string').and.not.empty;pm.expect(data&&data.parameterName).to.be.a('string').and.not.empty});",
+                  " if(valid){pm.environment.set('csrfToken',data.token);pm.environment.set('csrfHeaderName',data.headerName);pm.environment.set('csrfParameterName',data.parameterName)}else{pm.environment.unset('csrfToken');pm.environment.unset('csrfHeaderName');pm.environment.unset('csrfParameterName');pm.execution.setNextRequest(null)}",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/csrf",
+            "description": "Guarda token, header y parameter en environment."
+          }
+        }
+      ]
+    },
+    {
+      "name": "GETs / Lecturas",
+      "item": [
+        {
+          "name": "Dashboard",
+          "item": [
+            {
+              "name": "Resumen",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Resumen - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo clientes\",()=>pm.expect(d).to.have.property(\"clientes\"));",
+                      "   pm.test(\"Campo productos\",()=>pm.expect(d).to.have.property(\"productos\"));",
+                      "   pm.test(\"Campo lotes\",()=>pm.expect(d).to.have.property(\"lotes\"));",
+                      "   pm.test(\"Campo pedidos\",()=>pm.expect(d).to.have.property(\"pedidos\"));",
+                      "   pm.test(\"Campo exportaciones\",()=>pm.expect(d).to.have.property(\"exportaciones\"));",
+                      "   pm.test(\"Campo inspecciones\",()=>pm.expect(d).to.have.property(\"inspecciones\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/dashboard",
+                "description": ""
+              }
+            },
+            {
+              "name": "Resumen operativo",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Resumen operativo - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo clientesActivos\",()=>pm.expect(d).to.have.property(\"clientesActivos\"));",
+                      "   pm.test(\"Campo totalProductos\",()=>pm.expect(d).to.have.property(\"totalProductos\"));",
+                      "   pm.test(\"Campo totalLotes\",()=>pm.expect(d).to.have.property(\"totalLotes\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/dashboard/operativo",
+                "description": ""
+              }
+            }
+          ]
+        },
+        {
+          "name": "Clients",
+          "item": [
+            {
+              "name": "Listar clientes",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Listar clientes - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo id\",()=>pm.expect(d).to.have.property(\"id\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/clientes",
+                "description": ""
+              }
+            }
+          ]
+        },
+        {
+          "name": "Products",
+          "item": [
+            {
+              "name": "Listar productos",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Listar productos - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo id\",()=>pm.expect(d).to.have.property(\"id\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/productos",
+                "description": ""
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lots",
+          "item": [
+            {
+              "name": "Listar lotes",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Listar lotes - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo id\",()=>pm.expect(d).to.have.property(\"id\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/lotes",
+                "description": ""
+              }
+            }
+          ]
+        },
+        {
+          "name": "Orders",
+          "item": [
+            {
+              "name": "Listar pedidos",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Listar pedidos - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test('Array de pedidos con campos esenciales', function () { pm.expect(d).to.be.an('array'); pm.expect(d.length).to.be.above(0); d.forEach(item => { pm.expect(item).to.have.property('id'); pm.expect(item).to.have.property('codigo'); }); });",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/pedidos",
+                "description": ""
+              }
+            },
+            {
+              "name": "Detalle pedido demo",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Detalle pedido demo - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test('Array de detalles con loteId camelCase', function () { pm.expect(d).to.be.an('array'); pm.expect(d.length).to.be.above(0); d.forEach(item => { pm.expect(item).to.have.property('loteId'); pm.expect(item).to.have.property('lote'); pm.expect(item).to.have.property('cantidadKg'); }); });",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/pedidos/{{pedidoId}}",
+                "description": ""
+              }
+            }
+          ]
+        },
+        {
+          "name": "Exports",
+          "item": [
+            {
+              "name": "Listar exportaciones",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Listar exportaciones - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test('Array de exportaciones con campos esenciales', function () { pm.expect(d).to.be.an('array'); pm.expect(d.length).to.be.above(0); d.forEach(item => { pm.expect(item).to.have.property('id'); pm.expect(item).to.have.property('codigo'); pm.expect(item).to.have.property('estado'); }); });",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/exportaciones",
+                "description": ""
+              }
+            },
+            {
+              "name": "Requisitos documentales",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Requisitos documentales - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test('Array de requisitos con id, codigo y nombre', function () { pm.expect(d).to.be.an('array'); pm.expect(d.length).to.be.above(0); d.forEach(item => { pm.expect(item).to.have.property('id'); pm.expect(item).to.have.property('codigo'); pm.expect(item).to.have.property('nombre'); }); });",
+                      "   pm.test('Campo codigo en cada requisito',()=>{pm.expect(d).to.be.an('array');d.forEach(item=>pm.expect(item.codigo,'codigo').to.be.a('string').and.not.empty)});",
+                      "   pm.test('Campo nombre en cada requisito',()=>{pm.expect(d).to.be.an('array');d.forEach(item=>pm.expect(item.nombre,'nombre').to.be.a('string').and.not.empty)});",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/exportaciones/requisitos",
+                "description": ""
+              }
+            },
+            {
+              "name": "Detalle exportación demo",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Detalle exportación demo - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo codigo\",()=>pm.expect(d).to.have.property(\"codigo\"));",
+                      "   pm.test(\"Campo estado\",()=>pm.expect(d).to.have.property(\"estado\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/exportaciones/{{exportacionId}}",
+                "description": ""
+              }
+            },
+            {
+              "name": "Checklist demo",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Checklist demo - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test('Array de checklist con nombres SQL reales', function () { pm.expect(d).to.be.an('array'); pm.expect(d.length).to.be.above(0); d.forEach(item => { pm.expect(item).to.have.property('exportacion_requisito_id'); pm.expect(item).to.have.property('exportacion_id'); pm.expect(item).to.have.property('requisito_id'); pm.expect(item).to.have.property('nombre_requisito'); pm.expect(item).to.have.property('estado'); }); });",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/exportaciones/{{exportacionId}}/checklist",
+                "description": ""
+              }
+            },
+            {
+              "name": "Listar trámites",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Listar trámites - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test('Array de trámites; valida DTO si hay filas', function () { pm.expect(d).to.be.an('array'); if (d.length > 0) d.forEach(item => { pm.expect(item).to.have.property('id'); pm.expect(item).to.have.property('entidad'); pm.expect(item).to.have.property('tipoTramite'); pm.expect(item).to.have.property('estadoReportado'); }); });",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/exportaciones/{{exportacionId}}/tramites",
+                "description": ""
+              }
+            },
+            {
+              "name": "Historial exportación",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Historial exportación - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo id\",()=>pm.expect(d).to.have.property(\"id\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/exportaciones/{{exportacionId}}/historial",
+                "description": ""
+              }
+            }
+          ]
+        },
+        {
+          "name": "Quality",
+          "item": [
+            {
+              "name": "Listar inspecciones",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Listar inspecciones - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo id\",()=>pm.expect(d).to.have.property(\"id\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/calidad",
+                "description": ""
+              }
+            },
+            {
+              "name": "Historial calidad por lote",
+              "description": "",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Historial calidad por lote - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo id\",()=>pm.expect(d).to.have.property(\"id\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/calidad/lotes/{{loteId}}",
+                "description": ""
+              }
+            }
+          ]
+        },
+        {
+          "name": "Traceability",
+          "item": [
+            {
+              "name": "Trazabilidad lote DEMO",
+              "description": "Solo AUDITOR_PROCESO.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Trazabilidad lote DEMO - estado esperado\",function(){pm.expect([200,403]).to.include(pm.response.code);});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   pm.test(\"Campo codigoLote\",()=>pm.expect(d).to.have.property(\"codigoLote\"));",
+                      "   pm.test(\"Campo eventos\",()=>pm.expect(d).to.have.property(\"eventos\"));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/api/trazabilidad/{{loteCodigo}}",
+                "description": "Solo AUDITOR_PROCESO."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Escrituras / Negativas seguras",
+      "item": [
+        {
+          "name": "Clients",
+          "item": [
+            {
+              "name": "Crear cliente (plantilla segura)",
+              "description": "Email inválido evita insertar.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Crear cliente (plantilla segura) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   if(d&&d.id!==undefined)pm.environment.set(\"clienteId\",String(d.id));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/clientes",
+                "description": "Email inválido evita insertar.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"razonSocial\": \"Postman Test\",\n  \"pais\": \"ES\",\n  \"identificacionFiscal\": \"POSTMAN-{{runId}}\",\n  \"email\": \"correo-no-valido\",\n  \"telefono\": \"000000000\",\n  \"direccion\": \"Plantilla\",\n  \"contactoPrincipal\": \"Postman\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Actualizar cliente (ID inexistente)",
+              "description": "ID 999999 por defecto.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Actualizar cliente (ID inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   ",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/clientes/{{writeClienteId}}",
+                "description": "ID 999999 por defecto.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"razonSocial\": \"Postman Test\",\n  \"pais\": \"ES\",\n  \"identificacionFiscal\": \"POSTMAN-{{runId}}\",\n  \"email\": \"correo-no-valido\",\n  \"telefono\": \"000000000\",\n  \"direccion\": \"Plantilla\",\n  \"contactoPrincipal\": \"Postman\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Desactivar cliente (ID inexistente)",
+              "description": "ID 999999 por defecto.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Desactivar cliente (ID inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   ",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [],
+                "url": "{{baseUrl}}/api/clientes/{{writeClienteId}}/desactivar",
+                "description": "ID 999999 por defecto."
+              }
+            },
+            {
+              "name": "Cambiar estado (ID inexistente)",
+              "description": "ID 999999 por defecto.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Cambiar estado (ID inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   ",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/clientes/{{writeClienteId}}/estado",
+                "description": "ID 999999 por defecto.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"activo\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Products",
+          "item": [
+            {
+              "name": "Crear producto (plantilla segura)",
+              "description": "Tipo inválido evita insertar.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Crear producto (plantilla segura) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   if(d&&d.id!==undefined)pm.environment.set(\"productoId\",String(d.id));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/productos",
+                "description": "Tipo inválido evita insertar.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"codigo\": \"POSTMAN-{{runId}}\",\n  \"nombre\": \"Producto Postman\",\n  \"tipo\": \"INVALIDO\",\n  \"descripcion\": \"Plantilla.\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Actualizar producto (ID inexistente)",
+              "description": "ID 999999 por defecto.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Actualizar producto (ID inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   ",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/productos/{{writeProductoId}}",
+                "description": "ID 999999 por defecto.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"codigo\": \"POSTMAN-{{runId}}\",\n  \"nombre\": \"Producto Postman\",\n  \"tipo\": \"CAFE\",\n  \"descripcion\": \"Plantilla.\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Cambiar estado producto (ID inexistente)",
+              "description": "ID 999999 por defecto; sin body.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Cambiar estado producto (ID inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   ",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [],
+                "url": "{{baseUrl}}/api/productos/{{writeProductoId}}/estado",
+                "description": "ID 999999 por defecto; sin body."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lots",
+          "item": [
+            {
+              "name": "Crear lote (producto inexistente)",
+              "description": "productoId 999999 evita insertar.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Crear lote (producto inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   if(d&&d.id!==undefined)pm.environment.set(\"loteId\",String(d.id));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/lotes",
+                "description": "productoId 999999 evita insertar.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"codigo\": \"POSTMAN-LOTE-{{runId}}\",\n  \"productoId\": 999999,\n  \"origen\": \"Prueba\",\n  \"proveedorReferencia\": \"POSTMAN\",\n  \"fechaRecepcion\": \"2026-11-05\",\n  \"cantidadInicialKg\": 1\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Actualizar lote (ID inexistente)",
+              "description": "ID 999999 por defecto.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Actualizar lote (ID inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   ",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/lotes/{{writeLoteId}}",
+                "description": "ID 999999 por defecto.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"origen\": \"Prueba\",\n  \"proveedorReferencia\": \"POSTMAN\",\n  \"fechaRecepcion\": \"2026-11-05\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Orders",
+          "item": [
+            {
+              "name": "Crear pedido (cliente inexistente)",
+              "description": "Cliente inexistente evita reservar stock.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Crear pedido (cliente inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   if(d&&d.id!==undefined)pm.environment.set(\"pedidoId\",String(d.id));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/pedidos",
+                "description": "Cliente inexistente evita reservar stock.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"clienteId\": 999999,\n  \"paisDestino\": \"ES\",\n  \"loteId\": 1,\n  \"cantidadKg\": 1,\n  \"observaciones\": \"Plantilla.\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Pedido múltiple (cliente inexistente)",
+              "description": "Cliente inexistente evita reservar stock.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Pedido múltiple (cliente inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   if(d&&d.id!==undefined)pm.environment.set(\"pedidoId\",String(d.id));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/pedidos/multiple",
+                "description": "Cliente inexistente evita reservar stock.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"clienteId\": 999999,\n  \"paisDestino\": \"ES\",\n  \"detalles\": [\n    {\n      \"loteId\": 1,\n      \"cantidadKg\": 1\n    },\n    {\n      \"loteId\": 2,\n      \"cantidadKg\": 1\n    }\n  ],\n  \"observaciones\": \"Plantilla.\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Exports",
+          "item": [
+            {
+              "name": "Crear expediente (pedido inexistente)",
+              "description": "pedidoId 999999 evita insertar.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Crear expediente (pedido inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   if(d&&d.id!==undefined)pm.environment.set(\"exportacionId\",String(d.id));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/exportaciones",
+                "description": "pedidoId 999999 evita insertar.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"pedidoId\": 999999,\n  \"fechaSalidaPrevista\": \"2026-12-01\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Crear trámite (plantilla inválida)",
+              "description": "DTO inválido evita insertar.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Crear trámite (plantilla inválida) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   if(d&&d.id!==undefined)pm.environment.set(\"tramiteId\",String(d.id));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/exportaciones/{{exportacionId}}/tramites",
+                "description": "DTO inválido evita insertar.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"entidad\": \"\",\n  \"tipoTramite\": \"\",\n  \"referencia\": \"\",\n  \"estadoReportado\": \"\",\n  \"observaciones\": \"Plantilla.\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Cambiar estado (ID inexistente)",
+              "description": "ID 999999 por defecto.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Cambiar estado (ID inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   ",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/exportaciones/{{writeExportacionId}}/estado",
+                "description": "ID 999999 por defecto.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"estado\": \"LISTA_DESPACHO\",\n  \"observacion\": \"Plantilla.\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Documentation",
+              "item": [
+                {
+                  "name": "Cargar documento (seleccionar archivo)",
+                  "description": "Prueba negativa automatica: deja el campo file desactivado y uploadFile vacio; al faltar la parte multipart requerida, la aplicacion responde HTTP 500 JSON (Error interno del servidor). Prueba positiva manual: habilita el campo file en Body > form-data, selecciona un archivo .txt permitido y cambia uploadFile a manual como selector del modo positivo. Envia con la sesion autenticada; Postman genera Content-Type multipart y boundary. La prueba positiva valida la respuesta y la version creada; puede crear una version documental real.",
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                          " const positiveMode=!!pm.environment.get('uploadFile');",
+                          " pm.test('Carga documental: rechazo sin archivo o version creada con archivo real',function(){",
+                          "  pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del env?o').to.eql('true');",
+                          "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                          "  if(!positiveMode){",
+                          "   pm.expect(pm.response.code,'falta la parte multipart file requerida').to.eql(500);",
+                          "   pm.expect(ct,'respuesta JSON de error').to.satisfy(v=>v.includes('application/json')||v.includes('+json'));",
+                          "   const errorBody=pm.response.json();pm.expect(errorBody.status).to.eql(500);pm.expect(errorBody.message).to.eql('Error interno del servidor');",
+                          "  }else{",
+                          "   pm.expect([200,201],'carga con archivo real').to.include(pm.response.code);",
+                          "   pm.expect(ct,'respuesta JSON de carga').to.satisfy(v=>v.includes('application/json')||v.includes('+json'));",
+                          "   const d=pm.response.json();pm.expect(d).to.have.property('id');pm.expect(d.exportacion_requisito_id).to.eql(Number(pm.environment.get('exportacionRequisitoId')));pm.expect(d.numero_version).to.be.a('number').and.above(0);pm.expect(d.vigente).to.eql(true);pm.expect(d.estado).to.eql('CARGADO');pm.environment.set('documentoId',String(d.id));",
+                          "  }",
+                          " });",
+                          "}"
+                        ]
+                      }
+                    }
+                  ],
+                  "request": {
+                    "method": "POST",
+                    "header": [],
+                    "url": "{{baseUrl}}/api/exportaciones/{{exportacionId}}/requisitos/{{exportacionRequisitoId}}/documentos",
+                    "description": "Prueba negativa automatica: deja el campo file desactivado y uploadFile vacio; al faltar la parte multipart requerida, la aplicacion responde HTTP 500 JSON (Error interno del servidor). Prueba positiva manual: habilita el campo file en Body > form-data, selecciona un archivo .txt permitido y cambia uploadFile a manual como selector del modo positivo. Envia con la sesion autenticada; Postman genera Content-Type multipart y boundary. La prueba positiva valida la respuesta y la version creada; puede crear una version documental real.",
+                    "body": {
+                      "mode": "formdata",
+                      "formdata": [
+                        {
+                          "key": "file",
+                          "type": "file",
+                          "src": "",
+                          "disabled": true
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "Estado documental (inválido)",
+                  "description": "Estado inválido evita modificar DEMO.",
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                          " pm.test(\"Estado documental (inválido) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                          " if([200,201].includes(pm.response.code)){",
+                          "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                          "  if(ct.includes('application/json')||ct.includes('+json')){",
+                          "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                          "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                          "   ",
+                          "  }",
+                          " }",
+                          "}"
+                        ]
+                      }
+                    }
+                  ],
+                  "request": {
+                    "method": "PATCH",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": "{{baseUrl}}/api/exportaciones/{{exportacionId}}/documentos/{{documentoId}}/estado",
+                    "description": "Estado inválido evita modificar DEMO.",
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"estado\": \"INVALIDO\",\n  \"observacion\": \"Plantilla.\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Quality",
+          "item": [
+            {
+              "name": "Crear inspección (lote inexistente)",
+              "description": "loteId 999999 evita insertar.",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if(pm.environment.get('runnerSessionLost')!=='true'){",
+                      " pm.test(\"Crear inspección (lote inexistente) - estado esperado y CSRF preparado\",function(){pm.expect([200,201,400,403,409]).to.include(pm.response.code);pm.expect(pm.environment.get('csrfSentForRequest'),'token CSRF/header no preparados antes del envío').to.eql('true');});",
+                      " if([200,201].includes(pm.response.code)){",
+                      "  const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                      "  if(ct.includes('application/json')||ct.includes('+json')){",
+                      "   pm.test('Content-Type JSON en éxito',function(){pm.expect(ct).to.satisfy(v=>v.includes('application/json')||v.includes('+json'))});",
+                      "   let d;pm.test('JSON de éxito válido',function(){d=pm.response.json()});",
+                      "   if(d&&d.id!==undefined)pm.environment.set(\"inspeccionId\",String(d.id));",
+                      "  }",
+                      " }",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{baseUrl}}/api/calidad",
+                "description": "loteId 999999 evita insertar.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"loteId\": 999999,\n  \"humedadPorcentaje\": 10,\n  \"evaluacionTaza\": \"Plantilla\",\n  \"aroma\": \"Plantilla\",\n  \"defectos\": \"\",\n  \"observaciones\": \"Plantilla.\",\n  \"resultado\": \"PENDIENTE\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Authentication / Session — Logout (final)",
+      "item": [
+        {
+          "name": "Cerrar sesión",
+          "description": "POST /logout protegido por CSRF. Valida 302 a /login.html?logout del mismo origen, o la pagina de login si el cliente siguio el redirect. La siguiente request confirma la invalidacion de la sesion usando el cookie jar existente.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function parseAuthorityOrigin(scheme,authority){scheme=String(scheme||'').toLowerCase();authority=String(authority||'').trim().toLowerCase();if(!/^[a-z][a-z0-9+.-]*$/.test(scheme)||!authority||authority.includes('@'))return null;const m=authority.match(/^(\\[[0-9a-f:.]+\\]|[^:]+)(?::([0-9]+))?$/i);if(!m)return null;const host=m[1].toLowerCase();let port=m[2]?String(Number(m[2])):'';if((scheme==='http'&&port==='80')||(scheme==='https'&&port==='443'))port='';return scheme+'://'+host+(port?':'+port:'')}",
+                  "function normalizePath(path){path=String(path||'/');if(!path.startsWith('/'))return null;const parts=path.slice(1).split('/');const out=[];for(const raw of parts){const part=raw.toLowerCase().replace(/%2e/g,'.');if(part==='.')continue;if(part==='..'){if(out.length)out.pop();continue}out.push(raw)}let result='/'+out.join('/');if(path.endsWith('/')&&result!=='/'&&!result.endsWith('/'))result+='/';return result||'/'}",
+                  "function splitUrl(raw,baseUrl){raw=String(raw||'').trim();const bm=String(baseUrl||'').match(/^([a-z][a-z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/i);if(!bm)return null;const baseScheme=bm[1].toLowerCase(),baseOrigin=parseAuthorityOrigin(baseScheme,bm[2]);if(!baseOrigin)return null;let scheme=baseScheme,authority=bm[2],tail='';if(/^[a-z][a-z0-9+.-]*:\\/\\//i.test(raw)){const m=raw.match(/^([a-z][a-z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/i);if(!m)return null;scheme=m[1];authority=m[2];tail=(m[3]||'/')+(m[4]!==undefined?'?'+m[4]:'')}else if(raw.startsWith('//')){const m=raw.match(/^\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/);if(!m)return null;authority=m[1];tail=(m[2]||'/')+(m[3]!==undefined?'?'+m[3]:'')}else{tail=raw.split('#')[0];if(!tail)tail='/';if(!tail.startsWith('/')&&!tail.startsWith('?')){const basePath=bm[3]||'/';tail=basePath.slice(0,basePath.lastIndexOf('/')+1)+tail}}const hashAt=tail.indexOf('#');if(hashAt>=0)tail=tail.slice(0,hashAt);const queryAt=tail.indexOf('?');const path=queryAt>=0?tail.slice(0,queryAt):tail;const query=queryAt>=0?tail.slice(queryAt+1):'';return{origin:parseAuthorityOrigin(scheme,authority),baseOrigin,path:normalizePath(path||'/'),query}}",
+                  "function hasAuthError(query){return String(query||'').split('&').some(pair=>{let key=pair.split('=')[0].replace(/\\+/g,' ');try{key=decodeURIComponent(key)}catch(e){}return /(error|fail|exception)/i.test(key)})}",
+                  "const base=String(pm.environment.get('baseUrl')||'').trim();",
+                  "const loc=String(pm.response.headers.get('Location')||pm.response.headers.get('location')||'').trim();",
+                  "const target=loc?splitUrl(loc,base):null;",
+                  "const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                  "const html=pm.response.text();",
+                  "const sameOrigin=!!target&&!!target.origin&&target.origin===target.baseOrigin;",
+                  "const errorDestination=!!target&&hasAuthError(target.query);",
+                  "const loginPage=pm.response.code===200&&ct.includes('text/html')&&/<form\\b[^>]*\\baction\\s*=\\s*[\"']\\/login[\"']/i.test(html)&&/\\bname\\s*=\\s*[\"']email[\"']/i.test(html)&&/\\bname\\s*=\\s*[\"']password[\"']/i.test(html)&&/\\bid\\s*=\\s*[\"']login-message[\"']/i.test(html)&&!/\\bid\\s*=\\s*[\"']logout-form[\"']/i.test(html)&&!/\\bclass\\s*=\\s*[\"'][^\"']*\\bapp-shell\\b/i.test(html);",
+                  "function hasParameter(query,name){return String(query||'').split('&').some(pair=>{let key=pair.split('=')[0];try{key=decodeURIComponent(key.replace(/\\+/g,' '))}catch(e){return false}return key===name})}",
+                  "const redirectOk=pm.response.code===302&&sameOrigin&&target.path==='/login.html'&&hasParameter(target.query,'logout')&&!errorDestination;",
+                  "const followedOk=loginPage&&!errorDestination&&(!loc||(sameOrigin&&target.path==='/login.html'&&hasParameter(target.query,'logout')));",
+                  "const csrfPrepared=pm.environment.get('csrfSentForRequest')==='true';",
+                  "const logoutOk=csrfPrepared&&(redirectOk||followedOk);",
+                  "pm.test('Logout termina la sesion',function(){",
+                  " pm.expect(csrfPrepared,'POST /logout debe enviar el header CSRF de la sesion').to.eql(true);",
+                  " pm.expect(errorDestination,'logout no debe redirigir a un error de autenticacion').to.eql(false);",
+                  " pm.expect(redirectOk||followedOk,'logout debe devolver 302 al mismo origen /login.html?logout o su pagina de login seguida; status='+pm.response.code+', Location='+JSON.stringify(loc)).to.eql(true);",
+                  "});",
+                  "pm.environment.set('logoutResponseValidated',logoutOk?'true':'false');",
+                  "pm.environment.set('logoutSessionVerified','false');",
+                  "if(logoutOk){pm.environment.set('sessionAuthenticated','false');pm.environment.unset('csrfToken');pm.environment.unset('csrfHeaderName');pm.environment.unset('csrfParameterName')}",
+                  "else{pm.execution.setNextRequest(null)}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/logout",
+            "description": "POST /logout protegido por CSRF. Valida 302 a /login.html?logout del mismo origen, o la pagina de login si el cliente siguio el redirect. La siguiente request confirma la invalidacion de la sesion usando el cookie jar existente."
+          },
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        },
+        {
+          "name": "Verificar sesión cerrada",
+          "description": "Verificacion explicita posterior al logout. No borra cookies ni fuerza Cookie: el servidor debe rechazar la sesion anterior en /api/session. Puede crear una sesion anonima; la ausencia de JSESSIONID no es la condicion de exito.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function parseAuthorityOrigin(scheme,authority){scheme=String(scheme||'').toLowerCase();authority=String(authority||'').trim().toLowerCase();if(!/^[a-z][a-z0-9+.-]*$/.test(scheme)||!authority||authority.includes('@'))return null;const m=authority.match(/^(\\[[0-9a-f:.]+\\]|[^:]+)(?::([0-9]+))?$/i);if(!m)return null;const host=m[1].toLowerCase();let port=m[2]?String(Number(m[2])):'';if((scheme==='http'&&port==='80')||(scheme==='https'&&port==='443'))port='';return scheme+'://'+host+(port?':'+port:'')}",
+                  "function normalizePath(path){path=String(path||'/');if(!path.startsWith('/'))return null;const parts=path.slice(1).split('/');const out=[];for(const raw of parts){const part=raw.toLowerCase().replace(/%2e/g,'.');if(part==='.')continue;if(part==='..'){if(out.length)out.pop();continue}out.push(raw)}let result='/'+out.join('/');if(path.endsWith('/')&&result!=='/'&&!result.endsWith('/'))result+='/';return result||'/'}",
+                  "function splitUrl(raw,baseUrl){raw=String(raw||'').trim();const bm=String(baseUrl||'').match(/^([a-z][a-z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/i);if(!bm)return null;const baseScheme=bm[1].toLowerCase(),baseOrigin=parseAuthorityOrigin(baseScheme,bm[2]);if(!baseOrigin)return null;let scheme=baseScheme,authority=bm[2],tail='';if(/^[a-z][a-z0-9+.-]*:\\/\\//i.test(raw)){const m=raw.match(/^([a-z][a-z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/i);if(!m)return null;scheme=m[1];authority=m[2];tail=(m[3]||'/')+(m[4]!==undefined?'?'+m[4]:'')}else if(raw.startsWith('//')){const m=raw.match(/^\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/);if(!m)return null;authority=m[1];tail=(m[2]||'/')+(m[3]!==undefined?'?'+m[3]:'')}else{tail=raw.split('#')[0];if(!tail)tail='/';if(!tail.startsWith('/')&&!tail.startsWith('?')){const basePath=bm[3]||'/';tail=basePath.slice(0,basePath.lastIndexOf('/')+1)+tail}}const hashAt=tail.indexOf('#');if(hashAt>=0)tail=tail.slice(0,hashAt);const queryAt=tail.indexOf('?');const path=queryAt>=0?tail.slice(0,queryAt):tail;const query=queryAt>=0?tail.slice(queryAt+1):'';return{origin:parseAuthorityOrigin(scheme,authority),baseOrigin,path:normalizePath(path||'/'),query}}",
+                  "function hasAuthError(query){return String(query||'').split('&').some(pair=>{let key=pair.split('=')[0].replace(/\\+/g,' ');try{key=decodeURIComponent(key)}catch(e){}return /(error|fail|exception)/i.test(key)})}",
+                  "const base=String(pm.environment.get('baseUrl')||'').trim();",
+                  "const loc=String(pm.response.headers.get('Location')||pm.response.headers.get('location')||'').trim();",
+                  "const target=loc?splitUrl(loc,base):null;",
+                  "const ct=(pm.response.headers.get('Content-Type')||'').toLowerCase();",
+                  "const html=pm.response.text();",
+                  "const sameOrigin=!!target&&!!target.origin&&target.origin===target.baseOrigin;",
+                  "const errorDestination=!!target&&hasAuthError(target.query);",
+                  "const loginPage=pm.response.code===200&&ct.includes('text/html')&&/<form\\b[^>]*\\baction\\s*=\\s*[\"']\\/login[\"']/i.test(html)&&/\\bname\\s*=\\s*[\"']email[\"']/i.test(html)&&/\\bname\\s*=\\s*[\"']password[\"']/i.test(html)&&/\\bid\\s*=\\s*[\"']login-message[\"']/i.test(html)&&!/\\bid\\s*=\\s*[\"']logout-form[\"']/i.test(html)&&!/\\bclass\\s*=\\s*[\"'][^\"']*\\bapp-shell\\b/i.test(html);",
+                  "const redirectToLogin=pm.response.code===302&&sameOrigin&&target.path==='/login.html'&&!errorDestination;",
+                  "const followedLogin=loginPage&&!errorDestination&&(!loc||(sameOrigin&&target.path==='/login.html'));",
+                  "const wasLoggedOut=pm.environment.get('logoutResponseValidated')==='true';",
+                  "const isJson=ct.includes('application/json')||ct.includes('+json');",
+                  "const sessionGone=wasLoggedOut&&!isJson&&(redirectToLogin||followedLogin);",
+                  "pm.test('Sesion cerrada: /api/session ya no devuelve un usuario autenticado',function(){",
+                  " pm.expect(wasLoggedOut,'debe ejecutarse despues de un POST /logout valido').to.eql(true);",
+                  " pm.expect(isJson,'/api/session no debe devolver el JSON de una sesion autenticada').to.eql(false);",
+                  " pm.expect(errorDestination,'la redireccion no debe contener un error de autenticacion').to.eql(false);",
+                  " pm.expect(redirectToLogin||followedLogin,'la misma cookie jar debe recibir el redirect a /login.html o su formulario publico; status='+pm.response.code+', Location='+JSON.stringify(loc)).to.eql(true);",
+                  "});",
+                  "pm.environment.set('logoutSessionVerified',sessionGone?'true':'false');",
+                  "if(!sessionGone)pm.execution.setNextRequest(null);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/session"
+          },
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "expectedRole",
+      "value": "ESPECIALISTA_EXPORTACION",
+      "type": "string"
+    }
+  ],
+  "protocolProfileBehavior": {
+    "followRedirects": false
+  },
+  "description": " Redirects are surfaced so Runner/Newman detects authentication HTML instead of parsing a followed login page. Login verifica Location=/ sin seguir redirects; el Collection Runner/Newman conserva la cookie mediante su cookie jar. Sesión y CSRF se comprueban antes de continuar. No se hacen llamadas asíncronas pm.sendRequest."
+}

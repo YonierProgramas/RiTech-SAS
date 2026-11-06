@@ -1,0 +1,30 @@
+{
+  "name": "ritech-sas-starter",
+  "version": "1.0.0",
+  "description": "Proyecto base de **RiTech SAS – Sistema de Gestión de Exportaciones** para la asignatura Calidad de Software.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:report": "playwright show-report",
+    "test:api": "node scripts/ci/run-newman.cjs",
+    "test:ci:helpers": "node --test scripts/ci/*.test.cjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^26.6.6",
+    "fflate": "0.8.3",
+    "newman": "6.2.3",
+    "newman-reporter-htmlextra": "1.23.1"
+  },
+  "overrides": {
+    "handlebars": "4.7.10"
+  }
+}
